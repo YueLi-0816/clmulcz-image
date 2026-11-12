@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <config_compilers version="2.0">
-    <compiler MACH="clmu-app" COMPILER="gnu">
-        <NETCDF_PATH>/usr</NETCDF_PATH>
-        <NETCDF_C_PATH>/usr</NETCDF_C_PATH>
-        <NETCDF_FORTRAN_PATH>/usr</NETCDF_FORTRAN_PATH>
-        <FFLAGS>
-            <append> -I/usr/lib64/gfortran/modules </append>
-        </FFLAGS>
-        <SLIBS>
-            <append> -llapack -lblas </append>
-            <append> -lnetcdf -lnetcdff </append>
-        </SLIBS>
-    </compiler>
+  <compiler MACH="clmu-app" COMPILER="gnu">
+    <SCC>/opt/clmu/bin/gcc</SCC>
+    <SFC>/opt/clmu/bin/gfortran</SFC>
+    <SCXX>/opt/clmu/bin/g++</SCXX>
+    <MPICC>/opt/clmu/bin/mpicc</MPICC>
+    <MPIFC>/opt/clmu/bin/mpif90</MPIFC>
+    <MPICXX>/opt/clmu/bin/mpicxx</MPICXX>
+    <NETCDF_PATH>/opt/clmu</NETCDF_PATH>
+    <NETCDF_C_PATH>/opt/clmu</NETCDF_C_PATH>
+    <NETCDF_FORTRAN_PATH>/opt/clmu</NETCDF_FORTRAN_PATH>
+    <PNETCDF_PATH>/opt/clmu</PNETCDF_PATH>
+    <FFLAGS>
+      <append> -I/opt/clmu/include -fallow-argument-mismatch -fallow-invalid-boz </append>
+    </FFLAGS>
+    <CFLAGS>
+      <append> -I/opt/clmu/include </append>
+    </CFLAGS>
+    <SLIBS>
+      <append> -L/opt/clmu/lib -lnetcdff -lnetcdf -lpnetcdf </append>
+    </SLIBS>
+  </compiler>
 </config_compilers>

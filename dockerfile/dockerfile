@@ -1,126 +1,87 @@
-# escape=`
-FROM fedora:31
+# CLMU-LCZ container environment
+# The dependency versions below follow the CIME Docker recipe shipped with
+# the ctsm5.1.dev166-LCZ source, with the versions recorded in its README.
+FROM condaforge/miniforge3:latest
 
-# This image has amended from https://github.com/HPSCTerrSys/dockerfiles/blob/master/clm5/Dockerfile
-# The original dockerfile was created by the TerrSysMP team at the Helmholtz Centre for Environmental Research - UFZ
-# We use fedora 31 as the base image rather that Centos 8, and install the required packages for building CESM/CTSM
-# We also amended version of the required packages for building ESMF, PnetCDF, and CMake.
-# The the clm5.0 source code is cloned from the release-clm5.0 branch of the CTSM repository.
-# cime_config files are copied to the image to set the environment variables for building CTSM.
-# note!: the config of new version of CTSM is different from the this version, so the cime_config files are different.
-# p/pyscripts is created to store python scripts / sh scripts for running CTSM.
-# Image metadata for documentation purposes. Has no effect on docker build behavior.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# note: svn <=1.1 is not installed in this image, but is required for CESM installation
-LABEL `
-    org.label-schema.schema-version="1.0" `
-    org.label-schema.name="CTSM Development Environment" `
-    org.label-schema.version="1" `
-    org.label-schema.build-date="20231125" `
-    clm.version.major="5" `
-    clm.env.compiler="GCC" `
-    clm.env.compiler.version="9.3.1" `
-    clm.env.mpi="OpenMPI" `
-    clm.env.mpi.version="4.0.2-1" `
-    clm.env.cmake.version="3.18" `
-    clm.env.pnetcdf.version="1.12.3" `
-    clm.env.netcdf-c.version="4.7.0-2" `
-    clm.env.netcdf-fortran.version="4.5.2-3" `
-    clm.env.esmf.version="8.0.1" `
-    clm.env.python.version="3.7.9" `
-    clm.env.svn.version="1.12" ` 
-    clm.os.version="Fedora 31" 
+ENV USER=root \
+    LOGNAME=root \
+    CIME_MODEL=cesm \
+    PROJECT=/p/project \
+    SCRATCH=/p/scratch \
+    CESMDATAROOT=/p/scratch/CESMDATAROOT \
+    CSMDATA=/p/scratch/CESMDATAROOT/inputdata \
+    CASESCRIPT=/p/project/ctsm5.1.dev166-LCZ/cime/scripts \
+    ESMFMKFILE=/opt/clmu/lib/esmf.mk \
+    PATH=/opt/clmu/bin:/opt/conda/bin:/usr/bin:/bin
 
-# Import cime config files to image
-WORKDIR /tmp/.cime
-COPY cime_config/* /tmp/.cime/
+# CIME's Python tools and system Perl modules, including XML::LibXML and Switch.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates git perl libxml-libxml-perl libswitch-perl \
+        curl wget m4 make subversion \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install required packages from base repo
+# CIME/CTSM build tools and the compatible GNU, MPI, NetCDF and ESMF stack.
+# Keep Python on 3.10 and match the package versions documented by CIME.
+RUN mamba create --yes --prefix /opt/clmu --channel conda-forge \
+        python=3.10.22 \
+        cmake make curl wget subversion m4 pyyaml pytest \
+        blas lapack \
+        libnetcdf=4.9.2=*openmpi* \
+        netcdf-fortran=4.6.1=*openmpi* \
+        esmf=8.6.1=*openmpi* \
+        gcc_linux-64=12.4.0 gxx_linux-64=12.4.0 gfortran_linux-64=12.4.0 \
+        gcc=12.4.0 gxx=12.4.0 gfortran=12.4.0 \
+        openmpi=5.0.8 openmpi-mpifort \
+    && ln -sf /opt/clmu/bin/x86_64-conda-linux-gnu-ar /opt/clmu/bin/ar \
+    && ln -sf /opt/clmu/bin/x86_64-conda-linux-gnu-ranlib /opt/clmu/bin/ranlib \
+    && mamba clean --all --yes
 
-RUN dnf update -y 
-RUN yum install dnf-plugins-core -y
-RUN dnf group install -y "Development Tools" `
-    && dnf install -y glibc-langpack-en libcurl-devel man-db man-pages vim wget which tree autoconf`
-                      perl-App-cpanminus `
-                      # python36 `
-    #&& dnf config-manager --set-enabled PowerTools `
-# Install required packages from EPEL and SCL repos
-    && dnf install -y hdf5-devel lapack-devel ncl nco netcdf-devel netcdf-fortran netcdf-fortran-devel openssl-devel openmpi openmpi-devel `
-    && dnf clean all `
-    `
-# misc
-    #&& ln -s /usr/bin/python3 /usr/bin/python `
-    && cpanm bigint && cpanm XML::LibXML
+# PnetCDF is built against the same OpenMPI and NetCDF installation.
+ARG PNETCDF_VERSION=1.12.3
+RUN curl -L --fail --retry 3 \
+        "https://parallel-netcdf.github.io/Release/pnetcdf-${PNETCDF_VERSION}.tar.gz" \
+        -o /tmp/pnetcdf.tar.gz \
+    && mkdir /tmp/pnetcdf \
+    && tar -xzf /tmp/pnetcdf.tar.gz -C /tmp/pnetcdf --strip-components=1 \
+    && cd /tmp/pnetcdf \
+    && ./configure --prefix=/opt/clmu --disable-cxx --enable-shared \
+        MPICC=/opt/clmu/bin/mpicc MPICXX=/opt/clmu/bin/mpicxx \
+        MPIF77=/opt/clmu/bin/mpif77 MPIF90=/opt/clmu/bin/mpif90 \
+    && make -j4 \
+    && make install \
+    && rm -rf /tmp/pnetcdf /tmp/pnetcdf.tar.gz
 
-# Required envs for building libraries
-ENV ESMF_DIR=/tmp/dl/esmf-ESMF_8_0_1
-ENV ESMF_INSTALL_PREFIX=/usr/local
-ENV ESMF_INSTALL_MODDIR=include
-ENV ESMF_INSTALL_LIBDIR=lib
-ENV ESMF_INSTALL_BINDIR=bin
-ENV PATH="/usr/lib64/openmpi/bin:${PATH}"
+# PIO in this CTSM branch uses old CMake minimum-version declarations.
+# CMake 4 rejects them, so keep the build tool on a compatible 3.x release.
+RUN mamba install --yes --prefix /opt/clmu --channel conda-forge cmake=3.31.6 \
+    && mamba clean --all --yes
 
-# Install CMake
-RUN mkdir -vp /tmp/dl `
-    && cd /tmp/dl `
-    && wget -c https://github.com/Kitware/CMake/releases/download/v3.18.4/cmake-3.18.4.tar.gz `
-    && tar zxf cmake-3.18.4.tar.gz && cd cmake-3.18.4 `
-    && ./bootstrap && make && make install `
-    `
-# PnetCDF
-    && cd /tmp/dl `
-    #&& wget -c https://github.com/Parallel-NetCDF/PnetCDF/archive/checkpoint.1.12.1.tar.gz `
-    #&& tar zxf checkpoint.1.12.1.tar.gz `
-    && wget -c https://parallel-netcdf.github.io/Release/pnetcdf-1.12.3.tar.gz `
-    && tar -xvzf pnetcdf-1.12.3.tar.gz `
-    #&& cd PnetCDF-checkpoint.1.12.1 `
-    && cd pnetcdf-1.12.3 `
-    ##&& autoreconf -i `
-    && ./configure --prefix=/usr/local && make -j && make install `
-    `
-# Build and install ESMF libraries
-    && cd /tmp/dl `
-    && wget -c https://github.com/esmf-org/esmf/archive/ESMF_8_0_1.tar.gz `
-    && tar zxf ESMF_8_0_1.tar.gz `
-    && cd esmf-ESMF_8_0_1 `
-    && make -j && make install `
-    `
-# Cleanup
-    && cd /tmp && rm -rf /tmp/dl
+# CIME reads machine/compiler settings from this directory.
+COPY dockerfile/cime_config/ /root/.cime/
 
-# Add user account
+# CIME build-namelist uses Perl modules installed from the Linux distribution.
+RUN ln -sf /usr/bin/perl /opt/clmu/bin/perl \
+    && perl -MXML::LibXML -MSwitch -e 'print "CIME Perl modules available\n"'
+
+# Obtain the LCZ model and the external source repositories pinned by its
+# Externals.cfg files. CLM is this repository itself, so CIME must use SRCROOT.
+RUN mkdir -p /p/project /p/scratch/CESMDATAROOT/inputdata \
+        /p/scratch/CESMDATAROOT/inputdata/atm/datm7 \
+        /p/scratch/CESMDATAROOT/CaseOutputs /p/scratch/CESMDATAROOT/Archive \
+        /p/scratch/CESMDATAROOT/BaselineTests /p/pyscripts \
+    && git clone --branch ctsm5.1.dev166-LCZ --single-branch \
+        https://github.com/YuanSun-UoM/esm-dev_code.git \
+        /p/project/ctsm5.1.dev166-LCZ \
+    && cd /p/project/ctsm5.1.dev166-LCZ \
+    && ./manage_externals/checkout_externals \
+    && sed -E -i '/<entry id="COMP_ROOT_DIR_LND">/,/<\/entry>/ s#(<value component="clm"[[:space:]]*>)[^<]*(</value>)#\1$SRCROOT/\2#' \
+        cime/CIME/data/config/cesm/config_files.xml \
+    && sed -n '/<entry id="COMP_ROOT_DIR_LND">/,/<\/entry>/p' \
+        cime/CIME/data/config/cesm/config_files.xml | grep -Eq '<value component="clm"[[:space:]]*>\$SRCROOT/</value>' \
+    && grep -Fq '<value component="clm">$COMP_ROOT_DIR_LND/cime_config/config_tests.xml</value>' \
+        cime/CIME/data/config/cesm/config_files.xml
+
 WORKDIR /root
-
-# Set path
-RUN echo "" >> /root/.bashrc `
-    && echo "export PATH=/usr/lib64/openmpi/bin:$PATH" >> /root/.bashrc >> /root/.bashrc `
-    && echo "source /etc/profile.d/ncarg.sh" >> /root/.bashrc `
-    `
-# Set environment variables
-    && echo "" >> /root/.bashrc `
-    && echo "# CLM5 environment variables" >> /root/.bashrc `
-    && echo "" >> /root/.bashrc `
-    && echo "export PROJECT=/p/project" >> /root/.bashrc `
-    && echo "export SCRATCH=/p/scratch" >> /root/.bashrc `
-    && echo "export CESMDATAROOT=/p/scratch/CESMDATAROOT" >> /root/.bashrc `
-    && echo "export CSMDATA=$CESMDATAROOT/inputdata" >> /root/.bashrc `
-    && echo "export CASESCRIPT=/p/project/clm5.0/cime/scripts" >> /root/.bashrc `
-    `
-    && echo "export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1" >> /root/.bashrc `
-    && echo "export OMPI_ALLOW_RUN_AS_ROOT=1" >> /root/.bashrc `
-    `
-# Set usr
-    && echo "export USER=root" >> /root/.bashrc `
-# Copy cime config files to home directory
-    && mv /tmp/.cime /root/.cime
-
-# case and inputdata dir
-RUN mkdir -vp /p/project /p/scratch/CESMDATAROOT/inputdata/ForcingData p/pyscripts `
-    && cd /p/project `
-    && git clone -b release-clm5.0 https://github.com/ESCOMP/CTSM.git clm5.0 `
-    && cd clm5.0 `
-    && ./manage_externals/checkout_externals
-
-USER root
-WORKDIR /root
-CMD ["/bin/bash","-l"]
+CMD ["/bin/bash", "-l"]
