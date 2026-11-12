@@ -3,6 +3,8 @@
 # the ctsm5.1.dev166-LCZ source, with the versions recorded in its README.
 FROM condaforge/miniforge3:latest
 
+ARG TARGETARCH
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV USER=root \
@@ -23,30 +25,52 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 
 # CIME/CTSM build tools and the compatible GNU, MPI, NetCDF and ESMF stack.
-# Keep Python on 3.10 and match the package versions documented by CIME.
-RUN mamba create --yes --prefix /opt/clmu --channel conda-forge \
+# ESMF 8.6.1 is used on amd64. conda-forge's last ESMF build for Linux ARM64
+# is 8.4.2, which meets this CIME branch's documented minimum (8.4.1).
+# Keep Python on 3.10 and use native compilers for the target architecture.
+RUN set -euo pipefail; \
+    case "${TARGETARCH}" in \
+        amd64) \
+            ESMF_VERSION=8.6.1; \
+            OPENMPI_VERSION=5.0.8; \
+            COMPILER_PACKAGES=(gcc_linux-64=12.4.0 gxx_linux-64=12.4.0 gfortran_linux-64=12.4.0); \
+            COMPILER_PREFIX=x86_64-conda-linux-gnu ;; \
+        arm64) \
+            ESMF_VERSION=8.4.2; \
+            OPENMPI_VERSION=4.1.6; \
+            COMPILER_PACKAGES=(gcc_linux-aarch64=12.4.0 gxx_linux-aarch64=12.4.0 gfortran_linux-aarch64=12.4.0); \
+            COMPILER_PREFIX=aarch64-conda-linux-gnu ;; \
+        *) echo "Unsupported target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    mamba create --yes --prefix /opt/clmu --channel conda-forge \
         python=3.10.22 \
         cmake make curl wget subversion m4 pyyaml pytest \
         blas lapack \
         libnetcdf=4.9.2=*openmpi* \
         netcdf-fortran=4.6.1=*openmpi* \
-        esmf=8.6.1=*openmpi* \
-        gcc_linux-64=12.4.0 gxx_linux-64=12.4.0 gfortran_linux-64=12.4.0 \
+        "esmf=${ESMF_VERSION}=*openmpi*" \
+        "${COMPILER_PACKAGES[@]}" \
         gcc=12.4.0 gxx=12.4.0 gfortran=12.4.0 \
-        openmpi=5.0.8 openmpi-mpifort \
-    && ln -sf /opt/clmu/bin/x86_64-conda-linux-gnu-ar /opt/clmu/bin/ar \
-    && ln -sf /opt/clmu/bin/x86_64-conda-linux-gnu-ranlib /opt/clmu/bin/ranlib \
+        "openmpi=${OPENMPI_VERSION}" openmpi-mpifort \
+    && ln -sf "/opt/clmu/bin/${COMPILER_PREFIX}-ar" /opt/clmu/bin/ar \
+    && ln -sf "/opt/clmu/bin/${COMPILER_PREFIX}-ranlib" /opt/clmu/bin/ranlib \
     && mamba clean --all --yes
 
 # PnetCDF is built against the same OpenMPI and NetCDF installation.
 ARG PNETCDF_VERSION=1.12.3
-RUN curl -L --fail --retry 3 \
+RUN set -euo pipefail; \
+    if [[ "${TARGETARCH}" == "arm64" ]]; then \
+        PNETCDF_SHARED_FLAG=--disable-shared; \
+    else \
+        PNETCDF_SHARED_FLAG=--enable-shared; \
+    fi; \
+    curl -L --fail --retry 3 \
         "https://parallel-netcdf.github.io/Release/pnetcdf-${PNETCDF_VERSION}.tar.gz" \
         -o /tmp/pnetcdf.tar.gz \
     && mkdir /tmp/pnetcdf \
     && tar -xzf /tmp/pnetcdf.tar.gz -C /tmp/pnetcdf --strip-components=1 \
     && cd /tmp/pnetcdf \
-    && ./configure --prefix=/opt/clmu --disable-cxx --enable-shared \
+    && ./configure --prefix=/opt/clmu --disable-cxx "${PNETCDF_SHARED_FLAG}" \
         MPICC=/opt/clmu/bin/mpicc MPICXX=/opt/clmu/bin/mpicxx \
         MPIF77=/opt/clmu/bin/mpif77 MPIF90=/opt/clmu/bin/mpif90 \
     && make -j4 \
