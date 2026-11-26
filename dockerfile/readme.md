@@ -4,11 +4,12 @@ This folder builds a Linux container with the source code and compiler/library e
 
 ## What the build does
 
-1. Starts from the Miniforge Linux image and installs Python 3.10, GNU Fortran/C/C++, OpenMPI, NetCDF, ESMF, CMake and CIME's Python tools.
+1. Starts from the Miniforge Linux image and installs Python 3.10, GNU Fortran/C/C++, OpenMPI, NetCDF, ESMF, CMake and CIME's Python tools. BLAS and LAPACK are pinned to OpenBLAS on both amd64 and ARM64 to avoid the ARM64 BLIS DGEMM crash.
 2. Builds PnetCDF against that MPI and NetCDF stack.
 3. Clones `YuanSun-UoM/esm-dev_code` at `ctsm5.1.dev166-LCZ`.
 4. Runs `manage_externals/checkout_externals` to fetch the source repositories listed in the model's external configuration files.
 5. Sets CIME's CLM source path to the model repository root (`$SRCROOT/`), as required because this branch stores CLM at the root.
+6. Builds and runs a 1×1 CBLAS DGEMM check; the image build fails if `libblas.so` does not resolve to OpenBLAS or the matrix multiplication fails.
 
 The Dockerfile selects native Linux compilers for both `amd64` and `arm64`. Both use GNU 12.4, NetCDF-C 4.9.2, NetCDF-Fortran 4.6.1, CMake 3.31.6 and PnetCDF 1.12.3. `amd64` uses OpenMPI 5.0.8, ESMF 8.6.1 and a shared PnetCDF library. `arm64` uses OpenMPI 4.1.6 and ESMF 8.4.2 because the available Linux ARM64 ESMF 8.4.2 package requires OpenMPI 4.x; CIME requires ESMF 8.4.1 or newer. ARM64 uses a static PnetCDF library because its shared library's Fortran/MPI dependencies prevent the CMake checks in this CIME branch from linking correctly. The Conda base image tag is `latest`, so rebuilding later may receive a newer Miniforge package manager; the scientific/compiler packages remain version constrained.
 

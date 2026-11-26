@@ -45,7 +45,12 @@ RUN set -euo pipefail; \
     mamba create --yes --prefix /opt/clmu --channel conda-forge \
         python=3.10.22 \
         cmake make curl wget subversion m4 pyyaml pytest \
-        blas lapack \
+        # Pin the BLAS/LAPACK provider explicitly. Conda-forge's default
+        # linux-aarch64 BLAS provider is BLIS, which aborts during CLM matrix
+        # operations in this image. Keep the public image self-contained with
+        # OpenBLAS on both supported architectures.
+        "libblas=*=*openblas" \
+        "liblapack=*=*openblas" \
         libnetcdf=4.9.2=*openmpi* \
         netcdf-fortran=4.6.1=*openmpi* \
         "esmf=${ESMF_VERSION}=*openmpi*" \
@@ -55,6 +60,24 @@ RUN set -euo pipefail; \
     && ln -sf "/opt/clmu/bin/${COMPILER_PREFIX}-ar" /opt/clmu/bin/ar \
     && ln -sf "/opt/clmu/bin/${COMPILER_PREFIX}-ranlib" /opt/clmu/bin/ranlib \
     && mamba clean --all --yes
+
+# Verify both the selected linker target and the CBLAS operation that failed
+# in the previous ARM64 image. A failure here stops image creation.
+RUN set -euo pipefail; \
+    blas_target="$(readlink -f /opt/clmu/lib/libblas.so)"; \
+    echo "BLAS provider: ${blas_target}"; \
+    [[ "${blas_target,,}" == *openblas* ]]; \
+    printf '%s\n' \
+        'extern void cblas_dgemm(const int, const int, const int, const int, const int, const int, const double, const double*, const int, const double*, const int, const double, double*, const int);' \
+        'int main(void) {' \
+        '  const double a[1] = {2.0}, b[1] = {3.0}; double c[1] = {0.0};' \
+        '  cblas_dgemm(101, 111, 111, 1, 1, 1, 1.0, a, 1, b, 1, 0.0, c, 1);' \
+        '  return c[0] == 6.0 ? 0 : 1;' \
+        '}' > /tmp/cblas_smoke.c; \
+    gcc -I/opt/clmu/include -L/opt/clmu/lib \
+        -Wl,-rpath,/opt/clmu/lib -o /tmp/cblas_smoke /tmp/cblas_smoke.c -lblas; \
+    /tmp/cblas_smoke; \
+    rm -f /tmp/cblas_smoke /tmp/cblas_smoke.c
 
 # PnetCDF is built against the same OpenMPI and NetCDF installation.
 ARG PNETCDF_VERSION=1.12.3
